@@ -1,0 +1,137 @@
+---
+title: "a2_task2_canales_alicia"
+author: "Alicia Canales"
+date: "2023-02-19"
+output: 
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+library(tidyverse)
+library(here)
+library(kableExtra)
+library(broom)
+```
+
+For task 2, you will use non linear least squares to estimate parameters of a length to weight model for lizard populations in New Mexico. which provides a description of the dataset, the purpose of the analysis, a citation of the dataset, and answers the following questions.
+
+```{r}
+lizards <- read_csv(here('data','lizards.csv')) %>% 
+  mutate(log_length = log(SV_length),
+         log_weight = log(weight)) %>% 
+  drop_na()
+
+```
+
+#### Function
+```{r}
+weight_function <- function(a, b, SV_length){
+  out = a*(SV_length)^b
+  return(out)
+}
+```
+
+#### Guessing??
+```{r}
+my_guess_model <- lm(log_weight ~ log_length, data = lizards)
+summary(my_guess_model)
+ # the coefficient from this model:
+ # log_weight: -8.25686 --> e^(-8.25686) = 0.000259472
+ # log_length: 2.47942 --> e^(2.47942) = 11.93434049
+
+
+### Initial Guess
+guess_vec = c(11.93434049, 0.000259472)
+```
+
+#### NLS Model
+```{r}
+lizards_nls = nls(weight ~ weight_function(a, b, SV_length),
+                  data = lizards,
+                  start = list(a = guess_vec[1],
+                               b = guess_vec[2]),
+                  trace = TRUE)
+
+my_guess_model <- lm(log_weight ~ log_length, data = lizards)
+summary(my_guess_model)
+
+f1 <- log_weight ~ log_length
+
+lizards_predict <- lizards %>% 
+  mutate(predict = predict(lizards_nls, newdata=.))
+
+ggplot(data = lizards_predict) +
+  geom_point(aes(x= SV_length, y = weight, color = sex)) +
+  geom_smooth(aes(x= SV_length, y = predict), color = 'black') +
+  theme_minimal() +
+  labs(x = 'Snout to Vent Length', y = 'Weight')
+
+#First Kable table
+lizards_nls_model <- tidy(lizards_nls)
+lizards_nls_model$p.value <- ifelse(lizards_nls_model$p.value == '0', '0',' < 0')
+
+lizards_nls_model %>% 
+  kbl(caption = 'my caption') %>% 
+  kable_classic_2(html_font = "Cambria") # idk how to fix the p-value(, format="markdown")
+
+```
+
+#### Filtering out the Male Western Whiptail
+```{r}
+whiptail_lizards <- lizards %>% 
+  filter(spp == 'CNTI',
+         sex == 'M')
+
+my_guess_model_2 <- lm(log_weight ~ log_length, data = whiptail_lizards)
+summary(my_guess_model)
+
+guess_vec_2 = c(14.84733,0.000120596)
+
+whiptail_nls = nls(weight ~ weight_function(a, b, SV_length),
+                  data = whiptail_lizards,
+                  start = list(a = guess_vec_2[1],
+                               b = guess_vec_2[2]),
+                  trace = TRUE,
+                  control = nls.control(tol = 2.1e-9,minFactor=1e-10,warnOnly = TRUE, maxiter = 101))
+
+
+# Second table
+whiptail_nls_model <- broom::tidy(whiptail_nls)
+whiptail_nls_model %>% 
+  kbl(caption = 'my caption') %>% 
+  kable_classic_2(html_font = "Cambria")
+
+ggplot(whiptail_lizards, aes(x = SV_length, y = weight)) +
+  geom_point() +
+  stat_function(fun = function(x) predict(lizards_nls, newdata = data.frame(SV_length = x)),
+                color = 'red') +
+  stat_function(fun = function(x) predict(whiptail_nls, newdata = data.frame(SV_length = x)),
+                color = 'blue') +
+  labs(x = 'Snout to Vent Length', y = 'Weight', caption = " 1.56 for lizards and 3.35 for male")
+```
+
+### RMSE
+```{r}
+calc_rmse <- function(x, y) {
+  rmse <- (x - y)^2 %>% 
+    mean() %>% 
+    sqrt()
+  return(rmse)
+  
+rmse <- sqrt(mean(resid(lizards_nls)^2))
+print(paste('RMSE = ', round(rmse, 2)))
+
+rmse_male <- sqrt(mean(resid(whiptail_nls)^2))
+print(paste('RMSE = ', round(rmse_male, 2)))
+
+```
+
+
+
+
+
+
+
+

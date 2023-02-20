@@ -1,0 +1,248 @@
+---
+title: "a2_task1"
+author: "Alicia Canales"
+date: "2023-02-13"
+output: 
+  html_document:
+    code_folding: 'hide'
+---
+
+```{r setup, include=FALSE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
+```
+
+```{r}
+library(tidyverse)
+library(here)
+library(ggfortify)
+library(tidymodels)
+library(GGally)
+library(jtools)
+library(AICcmodavg)
+library(dplyr)
+library(kableExtra)
+library(patchwork)
+library(broom)
+```
+
+### Overview Section
+This data looks at the Florida palmetto use binary logistic regression to test feasibility of using variables plant height (height), canopy length (length), canopy width (width), and number of green leaves (green_lvs) to classify whether a palmetto is species Serenoa repens or Sabal etonia.
+
+```{r}
+# 1 = serenoa repens and 0 = sabal etonia
+palmetto <- read_csv(here('data', "palmetto.csv")) %>%
+  janitor::clean_names() %>% 
+  select(species, height, length, width, green_lvs)
+
+class(palmetto$species) # I need to change species from numeric to a factor
+levels(palmetto$species)
+
+palmetto_clean <- palmetto %>% 
+  mutate(species = factor(species)) %>% 
+  drop_na()
+
+palmetto_clean %>%
+  GGally::ggpairs(aes(color = species))
+
+```
+
+#### Visualization of trends
+
+```{r}
+p1 <- ggplot(data = palmetto_clean, aes(x = height, y = length)) +
+  geom_point(aes(color = green_lvs)) +
+  facet_wrap(~species) + 
+  scale_colour_gradient2(low ='green',
+                         mid = 'darkgreen',
+                         midpoint = 10,
+                         high = 'black',
+                         guide = 'colourbar') +
+  labs(x = 'Height', y = 'Length') +
+  theme_minimal()
+
+#levels(palmetto_clean$species)
+# species, height, width, length, green leaves
+
+p2 <- ggplot(data = palmetto_clean, aes(x = height, y = width)) +
+  geom_point(aes(color = green_lvs)) +
+  facet_wrap(~species)+
+  scale_colour_gradient2(low ='green',
+                         mid = 'darkgreen',
+                         midpoint = 10,
+                         high = 'black',
+                         guide = 'colourbar') +
+  labs(x = 'Height', y = 'Width') +
+  theme_minimal()
+
+plot_patch <- p1 + p2 + 
+  plot_layout(guides = 'collect') & 
+  theme(legend.position = 'bottom')
+  
+  plot_patch + plot_annotation(title = 'Physical Characteristics of Serenoa Repens (Species 1) and Sabal Etonia (Species 2)',
+                               caption = 'I will put a better caption here later',
+                               tag_levels = 'A', 'B')
+
+#levels(palmetto_clean$species)
+
+# species, height, width, green_lvs
+```
+Based on these plots it is clear that green leaves are a strong indicator on classifying species. Species 1 will most likely have more green leaves. It also appears that length is a strong indicator as well because in plot A species 2 has a longer canopy length. 
+
+
+### Binary Logistic Regression
+
+*Model 1*
+
+```{r}
+# only going to include the predictor parameters 
+md1_data <- palmetto_clean %>% 
+  select(species, height, width, length, green_lvs)
+
+f1 <- species ~ height + width + length + green_lvs
+blr1 <- glm(formul = f1, data = md1_data,
+            family = 'binomial')
+
+blr1_tidy <- tidy(blr1)
+blr1_tidy # idk what the intercept is 
+# these coefficients show that height increase by 0.04 and green leave decrease with every 1 unit change.
+
+blr1_fitted <- blr1 %>% 
+  broom::augment(type.predict = 'response') # predicting variables and making a new column in '.fitted' with a percent chance of being type 1 or type 0
+
+```
+
+*Model 2*
+
+```{r}
+#again only going to include the predictor parameters
+md2_data <- palmetto_clean %>% 
+  select(species, height, width, green_lvs)
+
+f2 <- species ~ height + width + green_lvs
+blr2 <- glm(formul = f2, data = md2_data,
+            family = 'binomial')
+
+blr2_tidy <- tidy(blr2)
+summary(blr2_tidy)
+
+blr2_fitted <- blr2 %>% 
+  broom::augment(type.predict = 'response')
+# these coefficients show that length is only going to increase 0.02 with every 1 unit change in length and decrease by 0.019 with every unit change in width
+```
+
+### Cross Validation
+```{r}
+set.seed(345)
+
+tidy_folds <- vfold_cv(palmetto_clean, v = 10, repeats = 5)
+tidy_folds
+
+
+blr_model <- logistic_reg() %>%
+   set_engine('glm')
+
+# Model 1 cross validation
+
+blr_tidy_wf1 <- workflow() %>%
+  add_model(blr_model) %>%
+  add_formula(f1)
+
+blr_tidy_cv_f1 <- blr_tidy_wf1 %>%
+  fit_resamples(tidy_folds)
+
+collect_metrics(blr_tidy_cv_f1)
+
+# Model 2 Cross Validation
+
+blr_tidy_wf2 <- workflow() %>%
+  add_model(blr_model) %>%
+  add_formula(f2)
+
+blr_tidy_cv_f2 <- blr_tidy_wf2 %>%
+  fit_resamples(tidy_folds)
+
+collect_metrics(blr_tidy_cv_f2)
+```
+
+### Predicting Species
+
+```{r}
+blr_model <- logistic_reg() %>% 
+ set_engine('glm')
+
+blr_tidyfit_f1 <- blr_model %>%
+  fit(f1, data = palmetto_clean)
+blr_tidyfit_f2 <- blr_model %>%
+  fit(f2, data = palmetto_clean)
+
+# Predicting for model 1
+blr_f1_pred <- md1_data %>%
+  mutate(predict(blr_tidyfit_f1, .),
+         predict(blr_tidyfit_f1, ., type = 'prob'))
+
+
+blr_f1_pred %>%
+  roc_curve(truth = species, .pred_1) %>%
+  autoplot()
+
+blr_f1_pred %>%
+  roc_auc(truth = species, .pred_1)
+
+#Predicting for model 2
+blr_f2_pred <- md2_data %>% 
+  mutate(predict(blr_tidyfit_f2,.),
+         predict(blr_tidyfit_f2,., type = 'prob'))
+
+blr_f2_pred %>% 
+  roc_curve(truth = species, .pred_2) %>% 
+  autoplot()
+
+blr_f2_pred %>% 
+  roc_auc(truth = species, .pred_2)
+
+# it seems that model 1 has the better fit due to the more positive curve going closer to 1
+```
+
+## Model selection
+```{r} 
+# Using AIC and BIC to choose the best model to predict species type 
+AICcmodavg::aictab(list(blr1, blr2)) 
+AICcmodavg::bictab(list(blr1, blr2))
+
+# also tells us that model 1 is the best at predicting species type
+
+#blr_tidyfit_f1$p.value <- ifelse(blr_tidyfit_f1$p.value == '0', '0', '< 0', paste('< 0'))
+
+broom::tidy(blr_tidyfit_f1) %>%
+  kbl(caption = "Figure 2. Model 1 Results") %>%
+  kable_paper('striped', 'condensed') %>%
+  row_spec(0, bold = T) %>% 
+  kable_classic_2(html_font = "Cambria")
+``` 
+
+### Tables (remember to take this heading out)
+```{r}
+# summarize and group by species 
+final_outcome_f1 <- blr_f1_pred %>% 
+  group_by(species) %>% 
+  rename('Species' = species) %>% 
+  summarize('Correctly Classified' = sum(Species == .pred_class),
+            'Incorrectly Classififed' = sum(Species != .pred_class),
+           '% Correctly Classififed' = mean(Species == .pred_class) * 100)
+
+final_outcome_f1 %>% 
+  kbl(caption = "Figure 3. Model 1 prediction outcomes of Serenoa Repens (species 1) and Sabal Etonia (species 2)") %>% 
+  kable_paper(position = 'float_right') %>% 
+  kable_classic_2(html_font = "Cambria")
+```
+
+#Last paragraph here
+
+
+
+
+
+
+
+
+
